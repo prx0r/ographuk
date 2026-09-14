@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS `drop.oracle_identifiers` (
 );
 CREATE TABLE IF NOT EXISTS `drop.oracle_relations` (
   source_id STRING NOT NULL, target_id STRING NOT NULL, rel_type STRING NOT NULL,
-  valid_from TIMESTAMP, valid_to TIMESTAMP, grade STRING, confidence FLOAT64
+  valid_from TIMESTAMP, valid_to TIMESTAMP, grade STRING, confidence FLOAT64,
+  source_refs ARRAY<STRING>, lineage_root STRING
 );
 CREATE TABLE IF NOT EXISTS `drop.oracle_observations` (
   subject STRING NOT NULL, predicate STRING NOT NULL, value STRING,

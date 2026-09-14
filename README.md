@@ -1,44 +1,131 @@
-# ographuk — Oracle UK runtime (oraclegraph)
+# ographuk — Oracle UK Runtime
 
-First-class layer: world data → verified observations → entities/relationships →
-signals → candidate opportunities → **Seesaw** → products/trades/campaigns →
-real outcomes → better Oracle.
+The canonical Oracle runtime for the UK. Turns raw external evidence into
+stable entities, temporal observations, deterministic signals, and candidate
+opportunities that Seesaw evaluates economically.
 
-- **Build brief:** `DEVINSTRUCT.md` (full E0–E10 spec, source priority, schemas).
-- **Semantics/ontology:** `prx0r/cgraphuk` (24 verticals, pains, fixes, laws,
-  campaigns, namespaces, index.json feed).
-- **BQ state/catalog:** `prx0r/bq` (schemas live in `schemas/` here; state in BigQuery).
-- **Consumer/outcomes:** `prx0r/agentcomfinal` (Seesaw allocation, builds).
+## What Oracle Does
 
-Loop discipline: Oracle observes. Seesaw interprets economically. AgentCom acts.
-QP verifies consequential outcomes. Never collapse these.
+```text
+EXTERNAL WORLD
+      ↓ source adapters
+RAW EVIDENCE (immutable, hash-addressed)
+      ↓ parser + normalizer
+ENTITIES + IDENTIFIERS (stable identity)
+      ↓
+OBSERVATIONS + RELATIONS (temporal, provenance-linked)
+      ↓ deterministic transforms
+SIGNALS (versioned formulas)
+      ↓ detectors
+CANDIDATE OPPORTUNITIES (with falsifiers + evidence)
+      ↓
+SEESAW (economic evaluation)
+      ↓
+AGENTCOM (real products / campaigns / trades)
+      ↓
+VERIFIED OUTCOMES → back into Oracle
+```
 
-## Layout (per DEVINSTRUCT §32)
+**The asset is not graph software.** It is years of normalized UK reality +
+historical snapshots + cross-source identity + our own action/outcome data.
+
+## Repo Relationships
+
+| Repo | Role | Owns |
+|------|------|------|
+| **ographuk** (this repo) | Oracle runtime | contracts, ingestion, normalization, entity resolution, events, signals, opportunities, query/MCP interfaces |
+| **cgraphuk** | Semantic/domain packs | vertical ontologies, pain/fix/regulation mappings, campaigns, voice profiles, human-curated reference knowledge |
+| **bq** | Persistent analytical storage | BigQuery Graph, views, materializations, DDL |
+| **agentcomfinal** | Opportunity consumer | Seesaw allocation, Autobuild, real-world actions, real outcomes |
+
+**Boundary:** Ingestion belongs in ographuk. Semantic knowledge belongs in
+cgraphuk. Storage adapters belong in bq. Actions belong in agentcomfinal.
+
+## Layout
 
 ```
 ographuk/
-  DEVINSTRUCT.md       the brief (E0–E10, sources, schemas)
-  README.md            this file
+  README.md              this file
+  DEVINSTRUCT.md         canonical build brief (E0–E10 full spec)
+  decdev.md              working brief for autonomous execution
   oracle/
-    AGENTS.md          module functions + gates (operator manual)
-    ids.py             content-hash IDs (tested)
-    contracts.py       schemas-as-code: all 10 E0 objects (tested)
-    provenance.py      raw hashing + receipt helpers (tested)
-    sources/registry.py  SourceRegistry v2: licensing + adapter interface
-    exports/seesaw.py  CandidateOpportunity → feature vector (tested)
-    normalize/ resolve/ signals/ opportunities/ probes/ mcp/  (stubs per phase)
+    ids.py               content-hash IDs (stable entity + immutable record)
+    contracts.py         schemas-as-code: all Oracle record types
+    provenance.py        raw hashing + ingest receipt helpers
+    sources/
+      registry.py        SourceRegistry v2: licensing + adapter interface
+    exports/
+      seesaw.py          CandidateOpportunity → feature vector
+    normalize/           taxonomy mapping (E1 — stub)
+    resolve/             entity resolution (E4 — stub)
+    signals/             versioned formula transforms (E7 — stub)
+    opportunities/       opportunity detectors (E9 — stub)
+    probes/              probe request logic (E8 — stub)
+    mcp/                 MCP query interface (E6+ — stub)
+    store/               persistence layer (E0 — stub)
+    raw/                 raw evidence store (E0 — stub)
+    gates.py             quarantine gate runner (E0 — stub)
+    ingest/              ingest pipeline runner (E0 — stub)
   schemas/
-    001_oracle_core.sql  oracle_* spine (11 tables)
-  fixtures/ tests/
+    001_oracle_core.sql  BigQuery DDL (11 tables, queued until billing on)
+  fixtures/              golden test fixtures
+  tests/
+    conftest.py          test path setup
+    test_contracts.py    E0 contract + validation tests
 ```
 
-## Phase status (DEVINSTRUCT §34)
+## Phase Status
 
-- [ ] E0 contract (schemas + content IDs — `contracts.py`+`ids.py` now exist, unreviewed)
-- [ ] E1 raw/provenance pipeline · E2 company spine · E3 geography … E10 proof
+| Phase | Description | Status |
+|-------|-------------|--------|
+| **E0** | Oracle contracts + IDs + hardening | **IN PROGRESS** — core contracts exist, hardening in progress |
+| E1 | Raw/provenance pipeline | TODO — requires RawStore + FetchResult + receipts |
+| E2 | Companies House backbone | TODO — requires E1 + live source adapter |
+| E3 | Geography spine | TODO |
+| E4 | Cross-source entity resolution | TODO |
+| E5 | Physical-property graph | TODO |
+| E6 | Change engine + MCP interface | TODO |
+| E7 | Market/demand graph | TODO |
+| E8 | Seesaw feed (full) | TODO — basic export exists |
+| E9 | Opportunity detectors | TODO |
+| E10 | First downstream proof | TODO |
 
-## Rules (inherited)
+## Laws
 
-Stdlib only. Unknown=null. Quarantine-first (killfeed2 gates). No placeholders.
-No BQ writes unreceipted. Billing-gated BQ DDL runs only after owner enables
-billing (sandbox 403 as of 2026-09-14) — local-first meanwhile.
+1. **Stdlib only** for core. External adapters may use pinned official deps.
+2. **Unknown = null**, never 0 or False.
+3. **Quarantine-first.** Every observation passes gates before promotion.
+4. **No fuzzy joins in canonical truth.** Candidate resolution edges carry
+   confidence/method but are excluded from default graph traversal.
+5. **Raw evidence retained.** Hash-addressed. Parser replay possible.
+6. **No observation without provenance.** receipt + record_locator required.
+7. **No empty source ambiguity.** FetchResult distinguishes SUCCESS_EMPTY
+   from FAILED from PARTIAL.
+8. **Idempotent.** Same input + same parser + same normalizer = same output.
+9. **Temporal is canonical.** History is never overwritten. Current state is
+   a view over the full observation stream.
+10. **Nothing becomes more true because an agent found it persuasive.**
+
+## Quickstart
+
+```bash
+cd /root/ographuk
+python3 -m pytest tests/ -q          # run contract tests
+python3 -c "from oracle.contracts import *; print('contracts OK')"
+```
+
+## What "E0 Complete" Looks Like
+
+All of these pass:
+
+```bash
+pytest -q                              # all tests green
+python -m oracle.cli check             # schema parity + rights + canonicalization
+python -m oracle.cli ingest fixtures/companies_house_small.zip
+python -m oracle.cli replay <raw_sha>
+python -m oracle.cli evidence <observation_id>
+```
+
+With: entity IDs surviving name changes, NaN rejected, SQL/Python parity
+enforced, FetchResult semantics, RawStore round-trip, quarantine gates
+firing, Seesaw rejecting unbacked features, full provenance replay.

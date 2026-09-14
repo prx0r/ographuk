@@ -1,7 +1,7 @@
 """SourceRegistry v2 (DEVINSTRUCT §11): executable source config + adapter interface."""
 from __future__ import annotations
 
-from oracle.contracts import Source
+from oracle.contracts import Source  # noqa: E402
 
 
 class SourceAdapter:

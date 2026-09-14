@@ -1,0 +1,68 @@
+[
+  {
+    "company_number": "00000001",
+    "company_name": "ACME TESTINGS LIMITED",
+    "company_status": "active",
+    "type": "ltd",
+    "incorporation_date": "2000-01-15",
+    "registered_postcode": "SW1A 1AA",
+    "sic_codes": ["62011", "62012"],
+    "address_line_1": "1 Test Street",
+    "locality": "London",
+    "accounts_next_due": "2026-09-30",
+    "confirmation_next_due": "2026-10-15"
+  },
+  {
+    "company_number": "00000002",
+    "company_name": "DISSOLVED FIXTURES LTD",
+    "company_status": "dissolved",
+    "type": "ltd",
+    "incorporation_date": "2005-03-20",
+    "dissolution_date": "2020-06-10",
+    "registered_postcode": "M1 1AE",
+    "sic_codes": ["47110"],
+    "address_line_1": "42 High Street",
+    "locality": "Manchester",
+    "accounts_next_due": null,
+    "confirmation_next_due": null
+  },
+  {
+    "company_number": "00000003",
+    "company_name": "MULTI SIC ENTERPRISES PLC",
+    "company_status": "active",
+    "type": "plc",
+    "incorporation_date": "1998-07-04",
+    "registered_postcode": "EH1 1YZ",
+    "sic_codes": ["41201", "41202", "43999"],
+    "address_line_1": "100 Princes Street",
+    "locality": "Edinburgh",
+    "accounts_next_due": "2026-12-31",
+    "confirmation_next_due": "2026-07-04"
+  },
+  {
+    "company_number": "00000004",
+    "company_name": "NULL FIELDS ENTERPRISE LTD",
+    "company_status": "active",
+    "type": "ltd",
+    "incorporation_date": "2020-01-01",
+    "registered_postcode": null,
+    "sic_codes": [],
+    "address_line_1": null,
+    "locality": null,
+    "accounts_next_due": null,
+    "confirmation_next_due": null
+  },
+  {
+    "company_number": "00000005",
+    "company_name": "ELECTRICIANS R US LIMITED",
+    "company_status": "active",
+    "type": "ltd",
+    "incorporation_date": "2019-05-12",
+    "registered_postcode": "B1 1BB",
+    "sic_codes": ["43210"],
+    "address_line_1": "7 Wiring Lane",
+    "locality": "Birmingham",
+    "accounts_next_due": "2026-10-12",
+    "confirmation_next_due": "2026-05-12"
+  }
+]

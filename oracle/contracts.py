@@ -1,12 +1,13 @@
-"""E0 contracts: schemas-as-code for the 10 Oracle objects (DEVINSTRUCT §34 E0).
+"""E0 contracts: schemas-as-code for all Oracle record types.
 
-source, raw object, entity, identifier, relation, observation, event, signal,
-hypothesis, outcome — plus CandidateOpportunity (§23). Validation is binary:
-valid or rejected with reasons (no scores at the gate layer).
+DEVINSTRUCT §3-15. Binary validation: valid or rejected with reasons.
+No scores at the gate layer.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+
+from oracle import ids
 
 
 SOURCE_CLASSES = {"primary-government", "primary-commercial", "secondary",
@@ -14,6 +15,13 @@ SOURCE_CLASSES = {"primary-government", "primary-commercial", "secondary",
 OBS_STATUSES = {"OBSERVED", "INVALID", "SUPERSEDED"}
 GRADES = {"HYPOTHESIS", "SUPPORTED", "QUANTIFIED", "VALIDATED"}
 OPPORTUNITY_TYPES = {"BUSINESS", "PLUGIN", "TRADE", "AD", "PRODUCT"}
+RELATION_TYPES = {"OPERATES_AT", "HAS_IDENTIFIER", "HAS_LOCATION",
+                  "SAME_AS", "SAME_AS_CANDIDATE", "PUBLISHED",
+                  "AWARDED_TO", "GOVERNED_BY", "IN_CATEGORY",
+                  "BRANDED_BY", "LISTS", "ON_MARKETPLACE",
+                  "TRIGGERS", "SUPERSEDES"}
+CONFIDENCE_MIN = 0.0
+CONFIDENCE_MAX = 1.0
 
 
 def _req(name, value, reasons):
@@ -23,6 +31,24 @@ def _req(name, value, reasons):
     return True
 
 
+def _check_range(name, value, lo, hi, reasons):
+    if value is not None:
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            reasons.append(f"bad:{name}:not-numeric")
+            return
+        if not (lo <= v <= hi):
+            reasons.append(f"bad:{name}:out-of-range")
+            if math.isnan(v) or math.isinf(v):
+                reasons.append(f"bad:{name}:non-finite")
+
+
+import math
+
+
+# ── Source ──
+
 @dataclass
 class Source:
     source_id: str
@@ -31,6 +57,13 @@ class Source:
     auth_class: str = ""
     cost: float = 0.0
     license: str = ""
+    terms_url: str = ""
+    terms_hash: str = ""
+    commercial_use: str = "UNKNOWN"       # ALLOWED / FORBIDDEN / UNKNOWN
+    raw_storage: str = "UNKNOWN"          # ALLOWED / FORBIDDEN / LIMITED / UNKNOWN
+    redistribution: str = "UNKNOWN"       # ALLOWED / FORBIDDEN / LIMITED / UNKNOWN
+    attribution_required: bool = False
+    personal_data_class: str = "NONE"     # NONE / PUBLIC_PERSONAL / SENSITIVE_RESTRICTED
     allowed_uses: list = field(default_factory=list)
     prohibited_uses: list = field(default_factory=list)
     cadence: str = ""
@@ -43,22 +76,42 @@ class Source:
         reasons = []
         _req("source_id", self.source_id, reasons)
         _req("license", self.license, reasons)
+        _req("terms_url", self.terms_url, reasons)
+        # Fail closed: raw retention + unknown storage = blocked
+        if self.raw_retention and self.raw_storage == "UNKNOWN":
+            reasons.append("blocked:raw_storage_unknown_with_retention")
+        if self.commercial_use not in ("ALLOWED", "FORBIDDEN", "UNKNOWN"):
+            reasons.append("bad:commercial_use")
+        if self.raw_storage not in ("ALLOWED", "FORBIDDEN", "LIMITED", "UNKNOWN"):
+            reasons.append("bad:raw_storage")
+        if self.redistribution not in ("ALLOWED", "FORBIDDEN", "LIMITED", "UNKNOWN"):
+            reasons.append("bad:redistribution")
+        if self.personal_data_class not in ("NONE", "PUBLIC_PERSONAL", "SENSITIVE_RESTRICTED"):
+            reasons.append("bad:personal_data_class")
         return (not reasons), reasons
 
+
+# ── RawObject ──
 
 @dataclass
 class RawObject:
     raw_sha256: str
     source_id: str
     raw_uri: str = ""
+    byte_length: int = 0
+    media_type: str = ""
     parser_version: str = "v1"
 
     def validate(self):
         reasons = []
         _req("raw_sha256", self.raw_sha256, reasons)
         _req("source_id", self.source_id, reasons)
+        if self.byte_length < 0:
+            reasons.append("bad:byte_length:negative")
         return (not reasons), reasons
 
+
+# ── Entity ──
 
 @dataclass
 class Entity:
@@ -76,6 +129,8 @@ class Entity:
         return (not reasons), reasons
 
 
+# ── Identifier ──
+
 @dataclass
 class Identifier:
     entity_id: str
@@ -90,54 +145,83 @@ class Identifier:
         return (not reasons), reasons
 
 
+# ── Relation ──
+
 @dataclass
 class Relation:
-    source_id: str
-    target_id: str
-    rel_type: str
+    from_entity_id: str
+    to_entity_id: str
+    relation_type: str
+    relation_id: str = ""
     valid_from: str = ""
     valid_to: str = ""
+    evidence_refs: list = field(default_factory=list)
+    confidence: float = None
+    lineage_root: str = ""
+
+    def __post_init__(self):
+        if not self.relation_id:
+            self.relation_id = ids.record_id("REL", {
+                "from": self.from_entity_id,
+                "to": self.to_entity_id,
+                "type": self.relation_type,
+            })
 
     def validate(self):
         reasons = []
-        _req("source_id", self.source_id, reasons)
-        _req("target_id", self.target_id, reasons)
-        _req("rel_type", self.rel_type, reasons)
-        if self.rel_type != self.rel_type.upper().replace(" ", "_"):
-            reasons.append("rel_type:not-upper-snake")
+        _req("from_entity_id", self.from_entity_id, reasons)
+        _req("to_entity_id", self.to_entity_id, reasons)
+        _req("relation_type", self.relation_type, reasons)
+        if self.relation_type != self.relation_type.upper().replace(" ", "_"):
+            reasons.append("relation_type:not-upper-snake")
+        if not self.evidence_refs:
+            reasons.append("missing:evidence_refs")
+        _check_range("confidence", self.confidence, CONFIDENCE_MIN, CONFIDENCE_MAX, reasons)
         return (not reasons), reasons
 
 
+# ── Observation ──
+
 @dataclass
 class Observation:
-    subject: str
+    subject_entity_id: str
     predicate: str
     value: object = None
-    source: str = ""
+    value_type: str = "string"       # string / number / boolean / null / object / array
+    source_id: str = ""
     source_class: str = ""
+    raw_receipt_id: str = ""
+    record_locator: str = ""
     observed_at: str = ""
     valid_from: str = ""
     valid_to: str = ""
     ingested_at: str = ""
-    raw_sha256: str = ""
+    parser_version: str = ""
+    normalizer_version: str = ""
     status: str = "OBSERVED"
-    confidence: object = None
-    basis: str = ""
+    confidence: float = None
+    lineage_root: str = ""
 
     def validate(self):
         reasons = []
-        _req("subject", self.subject, reasons)
+        _req("subject_entity_id", self.subject_entity_id, reasons)
         _req("predicate", self.predicate, reasons)
-        _req("source", self.source, reasons)
-        _req("raw_sha256", self.raw_sha256, reasons)
+        _req("source_id", self.source_id, reasons)
+        _req("raw_receipt_id", self.raw_receipt_id, reasons)
+        _req("record_locator", self.record_locator, reasons)
+        _req("observed_at", self.observed_at, reasons)
         if self.source_class and self.source_class not in SOURCE_CLASSES:
             reasons.append("bad:source_class")
         if self.status not in OBS_STATUSES:
             reasons.append("bad:status")
-        if self.confidence is not None and not isinstance(self.confidence, (int, float)):
-            reasons.append("bad:confidence")
+        _check_range("confidence", self.confidence, CONFIDENCE_MIN, CONFIDENCE_MAX, reasons)
+        if self.value_type not in ("string", "number", "boolean", "null",
+                                    "object", "array"):
+            reasons.append("bad:value_type")
         return (not reasons), reasons
 
+
+# ── Event ──
 
 @dataclass
 class Event:
@@ -145,12 +229,18 @@ class Event:
     subject: str = ""
     observed_at: str = ""
     payload: dict = field(default_factory=dict)
+    triggering_observation_ids: list = field(default_factory=list)
 
     def validate(self):
         reasons = []
         _req("event_type", self.event_type, reasons)
+        _req("observed_at", self.observed_at, reasons)
+        if not self.triggering_observation_ids:
+            reasons.append("missing:triggering_observation_ids")
         return (not reasons), reasons
 
+
+# ── Signal ──
 
 @dataclass
 class Signal:
@@ -160,14 +250,18 @@ class Signal:
     inputs: list = field(default_factory=list)
     value: object = None
     computed_at: str = ""
+    code_hash: str = ""
 
     def validate(self):
         reasons = []
         _req("signal_id", self.signal_id, reasons)
         _req("formula_id", self.formula_id, reasons)
         _req("inputs", self.inputs or None, reasons)
+        _req("computed_at", self.computed_at, reasons)
         return (not reasons), reasons
 
+
+# ── Hypothesis ──
 
 @dataclass
 class Hypothesis:
@@ -185,34 +279,48 @@ class Hypothesis:
         return (not reasons), reasons
 
 
+# ── Outcome ──
+
 @dataclass
 class Outcome:
-    subject: str
+    outcome_id: str
+    opportunity_id: str = ""
+    campaign_id: str = ""
     action: str = ""
     metrics: dict = field(default_factory=dict)
+    evidence_refs: list = field(default_factory=list)
+    qp_receipt_ids: list = field(default_factory=list)
     observed_at: str = ""
+    verification_status: str = "UNVERIFIED"  # UNVERIFIED / VERIFIED / REJECTED
 
     def validate(self):
         reasons = []
-        _req("subject", self.subject, reasons)
+        _req("outcome_id", self.outcome_id, reasons)
         _req("action", self.action, reasons)
+        _req("observed_at", self.observed_at, reasons)
+        if self.verification_status not in ("UNVERIFIED", "VERIFIED", "REJECTED"):
+            reasons.append("bad:verification_status")
         return (not reasons), reasons
 
+
+# ── CandidateOpportunity ──
 
 @dataclass
 class CandidateOpportunity:
     opportunity_id: str
+    detector_id: str = ""
+    detector_version: str = "v1"
     subject: str = ""
     type: str = ""
     thesis: str = ""
-    supporting_signals: list = field(default_factory=list)
-    contradicting_signals: list = field(default_factory=list)
+    supporting_signal_ids: list = field(default_factory=list)
+    contradicting_signal_ids: list = field(default_factory=list)
     unknowns: list = field(default_factory=list)
-    affected_entities: list = field(default_factory=list)
-    estimated_market_surface: dict = field(default_factory=dict)
+    affected_entity_ids: list = field(default_factory=list)
     possible_moat: list = field(default_factory=list)
-    suggested_probe: list = field(default_factory=list)
     falsifiers: list = field(default_factory=list)
+    probe_request_ids: list = field(default_factory=list)
+    input_root: str = ""
     created_at: str = ""
 
     def validate(self):
@@ -222,4 +330,6 @@ class CandidateOpportunity:
         _req("falsifiers", self.falsifiers or None, reasons)
         if self.type and self.type not in OPPORTUNITY_TYPES:
             reasons.append("bad:type")
+        if not self.supporting_signal_ids:
+            reasons.append("missing:supporting_signal_ids")
         return (not reasons), reasons

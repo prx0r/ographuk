@@ -39,13 +39,22 @@ def _stores(db_path, raw_dir):
 def cmd_ingest(args) -> int:
     from oracle.ingest.runner import run_ingest
     from oracle.normalize.companies_house import CompaniesHouseParser
-    from oracle.sources.companies_house import CompaniesHouseAdapter
+    from oracle.sources.companies_house import (
+        CompaniesHouseAdapter, source_contract)
+    from oracle.sources.registry import SourceRegistry
 
     raw_store, store = _stores(args.db, args.raw)
+    registry = SourceRegistry()
+    reg_result = registry.register(
+        source_contract(), CompaniesHouseAdapter())
+    if "error" in reg_result:
+        print(json.dumps({"error": reg_result["error"]}))
+        store.close()
+        return 1
     adapter = CompaniesHouseAdapter(fixture_path=args.fixture)
     receipt = run_ingest(SOURCE_ID, adapter, raw_store, store,
                          parser=CompaniesHouseParser(),
-                         registered_sources={SOURCE_ID})
+                         registry=registry)
     store.close()
     print(json.dumps(receipt, indent=2, default=str))
     return 0 if receipt.get("status") == "completed" else 1
@@ -82,9 +91,10 @@ def cmd_replay(args) -> int:
         store.close()
         return 1
     rdict = dict(zip(cols, row))
-    bundles, errors = ch.parse_artifact(
+    batch = ch.parse_artifact(
         payload, receipt_id=rdict["receipt_id"], raw_sha256=args.raw_sha,
-        observed_at=rdict["fetched_at"])
+        observed_at=rdict["fetched_at"],
+        artifact_name=args.raw_sha[:12])
     # Semantic root: (subject, predicate, value) sets must match exactly.
     # (Observation IDs are content-hashes over the same dicts, so a semantic
     # match implies ID match; we compare the semantic tuples directly.)
@@ -96,19 +106,19 @@ def cmd_replay(args) -> int:
     c.close()
     re_sem = sorted(
         (o["subject_entity_id"], o["predicate"], json.dumps(o["value"], sort_keys=True, default=str))
-        for b in bundles for o in b["observations"])
+        for o in batch.observations)
     # Stored values are JSON-encoded; normalize both sides before comparing.
     norm_stored = sorted((s, p, json.dumps(json.loads(v), sort_keys=True, default=str)
                           if _is_json(v) else json.dumps(v, sort_keys=True, default=str))
                          for s, p, v in sem)
-    match = norm_stored == re_sem and not errors
+    match = norm_stored == re_sem and not batch.rejects
     print(json.dumps({
         "raw_sha256": args.raw_sha,
         "receipt_id": rdict["receipt_id"],
         "stored_observations": n_stored,
         "rederived_observations": len(re_sem),
         "semantic_match": match,
-        "parse_errors": errors,
+        "parse_rejects": batch.rejects,
     }, indent=2))
     store.close()
     return 0 if match else 1

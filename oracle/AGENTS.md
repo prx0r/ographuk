@@ -20,12 +20,13 @@ agentcomfinal owns actions.
 
 | Module | Function | Status |
 |--------|----------|--------|
-| `ids.py` | Content-hash IDs (entity identity + record identity) | LIVE — needs entity ID split |
-| `contracts.py` | Schemas-as-code: all Oracle record types | LIVE — needs schema parity with SQL |
-| `provenance.py` | Raw hashing + ingest receipts | LIVE — needs RawEvidenceReceipt v2 |
-| `normalize/companies_house.py` | CH JSON parser → Entity + Observation bundles | LIVE (E1) — 5 fixture rows → 5 entities + 44 obs |
-| `sources/companies_house.py` | Fixture-backed CH adapter (fixture/empty/failed/partial) | LIVE (E1) |
-| `sources/registry.py` | SourceRegistry v2: licensing + adapter interface | LIVE — FetchResult contract enforced |
+| `ids.py` | Stable entity IDs + semantic record IDs (frozen fields) + semantic_root | LIVE (E1) |
+| `contracts.py` | Schemas-as-code: all Oracle record types (+IngestRun, +Quarantine) | LIVE (E1) — real three-way parity enforced |
+| `provenance.py` | Raw hashing + persisted RawEvidenceReceipts | LIVE (E1) |
+| `normalize/companies_house.py` | CH parser: JSON + streaming ZIP/CSV → CanonicalBatch | LIVE (E1) — both fixtures → 5 entities + 44 obs |
+| `sources/companies_house.py` | CH adapter (fixture/empty/failed/partial, deterministic watermark) + canonical source contract | LIVE (E1) |
+| `sources/registry.py` | SourceRegistry v2 + preflight PolicyDecision + contract hash | LIVE (E1) — enforcement on |
+| `batch.py` | CanonicalBatch: typed parser → runner boundary | LIVE (E1) |
 | `exports/seesaw.py` | CandidateOpportunity → feature vector | LIVE — needs provenance-backed signal export |
 | `cli.py` | Operator interface: ingest / replay / evidence / check | LIVE (E1) |
 | `normalize/` | Taxonomy mapping, source → canonical | LIVE (E1) — CH parser; generic taxonomy pending |
@@ -34,18 +35,22 @@ agentcomfinal owns actions.
 | `opportunities/` | Opportunity detectors (supply gap, fragmentation, etc) | STUB (E9) |
 | `probes/` | Probe requests for information acquisition | STUB (E8) |
 | `mcp/` | MCP query interface (oracle.entity, .slice, .changes) | STUB (E6+) |
-| `store/` | Persistence layer (SQLite local, BQ adapter) | LIVE (E0/E1) — SQLite + receipts table; BQ adapter pending |
-| `raw/` | Raw evidence store (hash-addressed filesystem) | LIVE (E0/E1) — put/get/verify + tamper detection |
-| `gates.py` | Quarantine gate runner | LIVE (E0/E1) — receipt-aware RAW_HASH/RECEIPT wiring |
-| `ingest/` | Ingest pipeline runner | LIVE (E1) — receipts, entities, envelope convention |
+| `store/` | Append-only SQLite backend (+receipts/sources/raw_objects/opportunities) | LIVE (E1) — BQ adapter pending |
+| `raw/` | Raw evidence store (hash-addressed filesystem) | LIVE (E1) — put/get/verify + tamper detection |
+| `gates.py` | Quarantine gate runner | LIVE (E1) — receipt-aware RAW_HASH/RECEIPT wiring |
+| `ingest/` | Ingest pipeline runner | LIVE (E1) — policy preflight, receipts, CanonicalBatch, semantic_root |
 
 ## Build Order (decdev.md §49)
 
-Current track — E1 golden path proven (2026-09-15, 69 tests green):
-`ORACLE_GOLDEN_PATH_V1` works locally: fixture → RawStore → receipt →
-parse → entities/observations → gates → SQLite, with replay + evidence
-via `python -m oracle.cli`. Next: E2 live Companies House adapter
-(bulk snapshot + streaming), then E3 geography spine.
+Current track — E1 golden path proven on two formats (2026-09-15, 80 tests
+green): `ORACLE_GOLDEN_PATH_V1` works locally for the JSON unit fixture AND
+the real-format ZIP/CSV fixture (real CH headers, streaming rows, same 44
+observations, same stable entities). Append-only store, semantic IDs with
+frozen field sets, deterministic watermarks (re-ingest → 0 inserted,
+identical semantic_root), receipt-aware gates, CanonicalBatch boundary,
+registered source contracts bound into receipts, structured quarantine,
+real three-way schema parity, CI workflow. Next: E2 live Companies House
+adapter (bulk snapshot + streaming) against the seven official parts.
 
 1. ~~Fix repository ownership wording~~ (done: README, DEVINSTRUCT)
 2. Stable entity IDs vs immutable record IDs ← YOU ARE HERE

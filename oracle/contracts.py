@@ -71,6 +71,34 @@ class Source:
     raw_retention: bool = True
     adapter: str = ""
     parser_version: str = "v1"
+    last_success: str = ""
+    cursor: str = ""
+    schema_hash: str = ""
+
+    def to_dict(self) -> dict:
+        """Canonical contract fields for hashing into receipts."""
+        return {
+            "source_id": self.source_id,
+            "jurisdiction": self.jurisdiction,
+            "access": self.access,
+            "auth_class": self.auth_class,
+            "cost": self.cost,
+            "license": self.license,
+            "terms_url": self.terms_url,
+            "terms_hash": self.terms_hash,
+            "commercial_use": self.commercial_use,
+            "raw_storage": self.raw_storage,
+            "redistribution": self.redistribution,
+            "attribution_required": self.attribution_required,
+            "personal_data_class": self.personal_data_class,
+            "allowed_uses": self.allowed_uses,
+            "prohibited_uses": self.prohibited_uses,
+            "cadence": self.cadence,
+            "entity_keys": self.entity_keys,
+            "raw_retention": self.raw_retention,
+            "adapter": self.adapter,
+            "parser_version": self.parser_version,
+        }
 
     def validate(self):
         reasons = []
@@ -101,6 +129,7 @@ class RawObject:
     byte_length: int = 0
     media_type: str = ""
     parser_version: str = "v1"
+    ingested_at: str = ""
 
     def validate(self):
         reasons = []
@@ -184,8 +213,9 @@ class Relation:
 
 @dataclass
 class Observation:
-    subject_entity_id: str
-    predicate: str
+    observation_id: str = ""
+    subject_entity_id: str = ""
+    predicate: str = ""
     value: object = None
     value_type: str = "string"       # string / number / boolean / null / object / array
     source_id: str = ""
@@ -226,8 +256,10 @@ class Observation:
 @dataclass
 class Event:
     event_type: str
+    event_id: str = ""
     subject: str = ""
     observed_at: str = ""
+    ingested_at: str = ""
     payload: dict = field(default_factory=dict)
     triggering_observation_ids: list = field(default_factory=list)
 
@@ -247,7 +279,7 @@ class Signal:
     signal_id: str
     formula_id: str
     formula_version: str = "v1"
-    inputs: list = field(default_factory=list)
+    input_ids: list = field(default_factory=list)
     value: object = None
     computed_at: str = ""
     code_hash: str = ""
@@ -256,7 +288,7 @@ class Signal:
         reasons = []
         _req("signal_id", self.signal_id, reasons)
         _req("formula_id", self.formula_id, reasons)
-        _req("inputs", self.inputs or None, reasons)
+        _req("input_ids", self.input_ids or None, reasons)
         _req("computed_at", self.computed_at, reasons)
         return (not reasons), reasons
 
@@ -303,7 +335,7 @@ class Outcome:
         return (not reasons), reasons
 
 
-# ── CandidateOpportunity ──
+# ── CandidateOpportunity ────
 
 @dataclass
 class CandidateOpportunity:
@@ -332,4 +364,55 @@ class CandidateOpportunity:
             reasons.append("bad:type")
         if not self.supporting_signal_ids:
             reasons.append("missing:supporting_signal_ids")
+        return (not reasons), reasons
+
+
+# ── IngestRun ──
+
+@dataclass
+class IngestRun:
+    run_id: str
+    source_id: str = ""
+    started_at: str = ""
+    finished_at: str = ""
+    status: str = "running"
+    rows_in: int = 0
+    rows_out: int = 0
+    quarantined: int = 0
+    error: str = ""
+    semantic_root: str = ""
+    rows_inserted: int = 0
+    rows_existing: int = 0
+
+    def validate(self):
+        reasons = []
+        _req("run_id", self.run_id, reasons)
+        _req("source_id", self.source_id, reasons)
+        _req("started_at", self.started_at, reasons)
+        return (not reasons), reasons
+
+
+# ── Quarantine ──
+
+@dataclass
+class Quarantine:
+    quarantine_id: str
+    record_type: str = ""
+    record_data: object = None
+    gate_failures: list = field(default_factory=list)
+    quarantined_at: str = ""
+    source_id: str = ""
+    run_id: str = ""
+    stage: str = ""
+    failure_code: str = ""
+    receipt_id: str = ""
+    record_locator: str = ""
+
+    def validate(self):
+        reasons = []
+        _req("quarantine_id", self.quarantine_id, reasons)
+        _req("quarantined_at", self.quarantined_at, reasons)
+        if self.stage and self.stage not in ("fetch", "parse", "normalize",
+                                             "gate", "store"):
+            reasons.append("bad:stage")
         return (not reasons), reasons

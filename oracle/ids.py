@@ -84,3 +84,76 @@ def obj_id(prefix: str, obj) -> str:
 def short(prefix: str, obj, n: int = 8) -> str:
     """DEPRECATED: use record_short instead."""
     return record_short(prefix, obj, n)
+
+
+# --- C. Semantic record IDs (frozen field sets) ---
+#
+# Identity is built ONLY from these fields. Ingestion metadata
+# (ingested_at, run ids, row counts) must NEVER enter an ID, or
+# re-ingestion creates duplicate semantic records.
+
+OBSERVATION_ID_FIELDS = (
+    "subject_entity_id", "predicate", "value", "value_type",
+    "source_id", "raw_receipt_id", "record_locator", "observed_at",
+    "parser_version", "normalizer_version",
+)
+
+
+def observation_id(subject_entity_id: str, predicate: str, value,
+                   value_type: str, source_id: str, raw_receipt_id: str,
+                   record_locator: str, observed_at: str,
+                   parser_version: str = "",
+                   normalizer_version: str = "") -> str:
+    """Content ID over semantic observation fields only."""
+    return record_id("OBS", {
+        "subject_entity_id": subject_entity_id,
+        "predicate": predicate,
+        "value": value,
+        "value_type": value_type,
+        "source_id": source_id,
+        "raw_receipt_id": raw_receipt_id,
+        "record_locator": record_locator,
+        "observed_at": observed_at,
+        "parser_version": parser_version,
+        "normalizer_version": normalizer_version,
+    })
+
+
+def relation_assertion_id(from_entity_id: str, to_entity_id: str,
+                          relation_type: str, valid_from: str = "",
+                          valid_to: str = "",
+                          evidence_refs: tuple | list = ()) -> str:
+    return record_id("REL", {
+        "from": from_entity_id,
+        "to": to_entity_id,
+        "type": relation_type,
+        "valid_from": valid_from or "",
+        "valid_to": valid_to or "",
+        "evidence": sorted(evidence_refs),
+    })
+
+
+def event_id(event_type: str, subject: str = "",
+             triggering_observation_ids: tuple | list = ()) -> str:
+    return record_id("EVT", {
+        "type": event_type,
+        "subject": subject or "",
+        "triggering": sorted(triggering_observation_ids),
+    })
+
+
+def signal_id(formula_id: str, formula_version: str,
+              input_ids: tuple | list = ()) -> str:
+    return record_id("SIG", {
+        "formula_id": formula_id,
+        "formula_version": formula_version,
+        "input_ids": sorted(input_ids),
+    })
+
+
+def semantic_root(record_ids: tuple | list) -> str:
+    """Deterministic root over canonical output record IDs (Merkle-leaf sort).
+
+    Same semantic record set → same root, regardless of insert order.
+    """
+    return "ROOT:" + sha256_hex(canonical(sorted(record_ids)))

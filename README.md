@@ -80,8 +80,9 @@ ographuk/
     companies_house/   golden CH fixture (5 rows)
   tests/
     conftest.py          test path setup
-    test_contracts.py    E0 contract + validation tests (56)
-    test_golden_path.py  E1 golden-path tests (13)
+    test_contracts.py    E0 contract + validation tests (57)
+    test_golden_path.py  E1 golden-path tests (19: json + zip + quarantine + FetchResult)
+    test_schema_parity.py real parity: dataclasses ↔ manifest ↔ SQLite/BQ (4)
 ```
 
 ## Phase Status
@@ -89,8 +90,8 @@ ographuk/
 | Phase | Description | Status |
 |-------|-------------|--------|
 | **E0** | Oracle contracts + IDs + hardening | **IN PROGRESS** — core contracts exist, hardening in progress |
-| **E1** | Raw/provenance pipeline | **IN PROGRESS** — golden path proven locally: fixture → RawStore → receipt → parse → 5 entities + 44 obs → gates → SQLite; replay + evidence via `python -m oracle.cli`; 69 tests green (2026-09-15). Remaining: live source adapter heartbeat |
-| E2 | Companies House backbone | TODO — requires live bulk snapshot + streaming adapter |
+| **E1** | Raw/provenance pipeline | **IN PROGRESS** — golden path proven locally on two formats: JSON fixture + real-format ZIP/CSV (`ch_basic_fixture.zip`, real CH headers, streaming rows) → RawStore → receipt (contract-bound) → parse → CanonicalBatch → 5 entities + 44 obs → gates → append-only SQLite; re-ingest → 0 inserted / identical `semantic_root`; replay + evidence via `python -m oracle.cli`; 80 tests green (2026-09-15). Remaining: live source adapter heartbeat |
+| E2 | Companies House backbone | TODO — parser architecture is ZIP/CSV-streaming ready; needs live 7-part bulk snapshot |
 | E3 | Geography spine | TODO |
 | E4 | Cross-source entity resolution | TODO |
 | E5 | Physical-property graph | TODO |
@@ -131,7 +132,7 @@ All of these pass:
 ```bash
 pytest -q                              # all tests green
 python -m oracle.cli check             # schema parity + rights + canonicalization
-python -m oracle.cli ingest fixtures/companies_house_small.zip
+python -m oracle.cli ingest fixtures/companies_house/ch_basic_fixture.zip
 python -m oracle.cli replay <raw_sha>
 python -m oracle.cli evidence <observation_id>
 ```

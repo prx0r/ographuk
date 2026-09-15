@@ -509,15 +509,15 @@ def test_relation_upper_snake():
     assert not bad and "relation_type:not-upper-snake" in r
 
 
-    def test_registry_rejects_unlicensed():
-        from oracle.sources.registry import SourceRegistry
-        reg = SourceRegistry()
-        assert "error" in reg.register(Source(source_id="x"))
-        assert reg.register(Source(source_id="ch", license="OGL",
-                                   terms_url="https://example.com",
-                                   raw_storage="ALLOWED")) == {
-            "registered": "ch"}
-        assert reg.list() == ["ch"]
+def test_registry_rejects_unlicensed():
+    from oracle.sources.registry import SourceRegistry
+    reg = SourceRegistry()
+    assert "error" in reg.register(Source(source_id="x"))
+    assert reg.register(Source(source_id="ch", license="OGL",
+                               terms_url="https://example.com",
+                               raw_storage="ALLOWED")) == {
+        "registered": "ch"}
+    assert reg.list() == ["ch"]
 
 
 def test_seesaw_export_passthrough():
@@ -549,7 +549,7 @@ def test_signal_requires_inputs():
     ok, _ = Signal(
         signal_id="SIG:1",
         formula_id="density",
-        inputs=["OBS:1"],
+        input_ids=["OBS:1"],
         computed_at="2026-01-01"
     ).validate()
     assert ok

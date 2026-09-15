@@ -38,7 +38,10 @@ CREATE TABLE IF NOT EXISTS `drop.oracle_ingest_runs` (
   rows_in INT64 DEFAULT 0,
   rows_out INT64 DEFAULT 0,
   quarantined INT64 DEFAULT 0,
-  error STRING
+  error STRING,
+  semantic_root STRING DEFAULT '',
+  rows_inserted INT64 DEFAULT 0,
+  rows_existing INT64 DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS `drop.oracle_raw_objects` (
@@ -77,7 +80,6 @@ CREATE TABLE IF NOT EXISTS `drop.oracle_relations` (
   valid_from TIMESTAMP,
   valid_to TIMESTAMP
 );
-
 CREATE TABLE IF NOT EXISTS `drop.oracle_observations` (
   observation_id STRING NOT NULL,
   subject_entity_id STRING NOT NULL,
@@ -150,7 +152,29 @@ CREATE TABLE IF NOT EXISTS `drop.oracle_quarantine` (
   gate_failures ARRAY<STRING>,
   quarantined_at TIMESTAMP NOT NULL,
   source_id STRING DEFAULT '',
-  run_id STRING DEFAULT ''
+  run_id STRING DEFAULT '',
+  stage STRING DEFAULT '',
+  failure_code STRING DEFAULT '',
+  receipt_id STRING DEFAULT '',
+  record_locator STRING DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS `drop.oracle_opportunities` (
+  opportunity_id STRING NOT NULL,
+  detector_id STRING DEFAULT '',
+  detector_version STRING DEFAULT 'v1',
+  subject STRING DEFAULT '',
+  type STRING DEFAULT '',
+  thesis STRING DEFAULT '',
+  supporting_signal_ids ARRAY<STRING>,
+  contradicting_signal_ids ARRAY<STRING>,
+  unknowns ARRAY<STRING>,
+  affected_entity_ids ARRAY<STRING>,
+  possible_moat ARRAY<STRING>,
+  falsifiers ARRAY<STRING>,
+  probe_request_ids ARRAY<STRING>,
+  input_root STRING DEFAULT '',
+  created_at TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS `drop.oracle_receipts` (

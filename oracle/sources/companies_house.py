@@ -15,6 +15,39 @@ from oracle.sources.registry import SourceAdapter
 SOURCE_ID = "companies-house"
 ADAPTER_VERSION = "ch-adapter-v1"
 
+from oracle.contracts import Source  # noqa: E402
+
+
+def source_contract() -> Source:
+    """Canonical Companies House source contract (fail-closed rights).
+
+    Free Company Data Product + streaming API. OGL reuse allows raw
+    retention and derivation; contract hash is bound into every receipt.
+    """
+    from oracle.normalize.companies_house import PARSER_VERSION
+
+    return Source(
+        source_id=SOURCE_ID,
+        jurisdiction="GB",
+        access="public",
+        auth_class="keyless-bulk",
+        cost=0.0,
+        license="OGL-3.0",
+        terms_url="https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/",
+        commercial_use="ALLOWED",
+        raw_storage="ALLOWED",
+        redistribution="ALLOWED",
+        attribution_required=True,
+        personal_data_class="NONE",
+        allowed_uses=["ingest", "retain_raw", "derive", "redistribute_derived"],
+        prohibited_uses=[],
+        cadence="monthly-bulk+streaming",
+        entity_keys=["company_number"],
+        raw_retention=True,
+        adapter=f"{SOURCE_ID}:{ADAPTER_VERSION}",
+        parser_version=PARSER_VERSION,
+    )
+
 DEFAULT_FIXTURE = (
     Path(__file__).resolve().parent.parent.parent
     / "fixtures" / "companies_house" / "small_snapshot.json"
@@ -23,6 +56,68 @@ DEFAULT_FIXTURE = (
 
 def _utcnow() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _file_watermark(path: Path) -> str:
+    """Deterministic watermark: the fixture file's mtime (UTC).
+
+    Same file → same watermark → same observed_at/receipt_id → same
+    semantic IDs. Re-ingestion is idempotent by construction; a changed
+    file (new snapshot) yields a new watermark and new records, correctly.
+    """
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return _utcnow()
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(mtime))
+
+
+def _is_empty_payload(raw: bytes) -> bool:
+    """Factual emptiness across formats: blank, `[]`, or header-only ZIP."""
+    if not raw.strip() or raw.strip() == b"[]":
+        return True
+    if raw[:4] == b"PK\x03\x04":
+        import io
+        import zipfile
+
+        try:
+            with zipfile.ZipFile(io.BytesIO(raw)) as z:
+                for name in z.namelist():
+                    if not name.lower().endswith(".csv"):
+                        continue
+                    with z.open(name) as fh:
+                        content = fh.read().strip()
+                        # header-only (single line) or blank → empty
+                        lines = [ln for ln in content.splitlines() if ln.strip()]
+                        if len(lines) > 1:
+                            return False
+            return True
+        except zipfile.BadZipFile:
+            return False
+    return False
+
+
+def _first_n_records(raw: bytes, n: int) -> bytes:
+    """Slice the first n data records, preserving the artifact format."""
+    if raw[:4] == b"PK\x03\x04":
+        import csv
+        import io
+        import zipfile
+
+        with zipfile.ZipFile(io.BytesIO(raw)) as z:
+            inner = sorted(n for n in z.namelist()
+                           if n.lower().endswith(".csv"))[0]
+            text = z.read(inner).decode("utf-8")
+        lines = text.splitlines()
+        head, body = lines[0], lines[1:1 + n]
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr(inner, "\n".join([head] + body) + "\n")
+        return buf.getvalue()
+    import json
+
+    rows = json.loads(raw.decode("utf-8"))
+    return json.dumps(rows[:n]).encode("utf-8")
 
 
 class CompaniesHouseAdapter(SourceAdapter):
@@ -48,10 +143,12 @@ class CompaniesHouseAdapter(SourceAdapter):
         self.fixture_path = Path(fixture_path) if fixture_path else DEFAULT_FIXTURE
         self.mode = mode
         self.partial_records = partial_records
+        self.artifact_name = self.fixture_path.name
         self._error = error or {"code": "SOURCE_UNREACHABLE", "detail": "simulated outage"}
 
     def fetch(self) -> FetchResult:
         started = _utcnow()
+        watermark = _file_watermark(self.fixture_path)
         if self.mode == "failed":
             return FetchResult(
                 status=FetchStatus.FAILED,
@@ -74,14 +171,11 @@ class CompaniesHouseAdapter(SourceAdapter):
                 adapter_version=ADAPTER_VERSION,
                 started_at=started,
                 finished_at=_utcnow(),
-                watermark=started,
+                watermark=watermark,
             )
         raw = self.fixture_path.read_bytes()
         if self.mode == "partial":
-            import json
-
-            rows = json.loads(raw.decode("utf-8"))
-            raw = json.dumps(rows[: self.partial_records]).encode("utf-8")
+            raw = _first_n_records(raw, self.partial_records)
             return FetchResult(
                 status=FetchStatus.PARTIAL,
                 artifacts=[raw],
@@ -91,10 +185,10 @@ class CompaniesHouseAdapter(SourceAdapter):
                 adapter_version=ADAPTER_VERSION,
                 started_at=started,
                 finished_at=_utcnow(),
-                watermark=started,
+                watermark=watermark,
             )
         # fixture (default): full snapshot semantics
-        if not raw.strip() or raw.strip() == b"[]":
+        if _is_empty_payload(raw):
             return FetchResult(
                 status=FetchStatus.SUCCESS_EMPTY,
                 artifacts=[],
@@ -104,7 +198,7 @@ class CompaniesHouseAdapter(SourceAdapter):
                 adapter_version=ADAPTER_VERSION,
                 started_at=started,
                 finished_at=_utcnow(),
-                watermark=started,
+                watermark=watermark,
             )
         return FetchResult(
             status=FetchStatus.SUCCESS,
@@ -115,5 +209,5 @@ class CompaniesHouseAdapter(SourceAdapter):
             adapter_version=ADAPTER_VERSION,
             started_at=started,
             finished_at=_utcnow(),
-            watermark=started,
+            watermark=watermark,
         )

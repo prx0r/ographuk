@@ -1,0 +1,28 @@
+# ographuk CI — stdlib only, no dependencies to install.
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  oracle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: compileall
+        run: python3 -m compileall -q oracle tests
+      - name: pytest
+        run: python3 -m pytest tests/ -q
+      - name: cli check
+        run: python3 -m oracle.cli check
+      - name: golden replay proof
+        run: |
+          python3 -m oracle.cli ingest fixtures/companies_house/small_snapshot.json \
+            --db /tmp/ci-oracle.db --raw /tmp/ci-raw
+          SHA=$(python3 -c "import sqlite3; print(sqlite3.connect('/tmp/ci-oracle.db').execute('select raw_sha256 from oracle_receipts').fetchone()[0])")
+          python3 -m oracle.cli replay "$SHA" --db /tmp/ci-oracle.db --raw /tmp/ci-raw
+          python3 -m oracle.cli ingest fixtures/companies_house/ch_basic_fixture.zip \
+            --db /tmp/ci-oracle.db --raw /tmp/ci-raw

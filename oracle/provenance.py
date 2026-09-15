@@ -20,6 +20,7 @@ class RawEvidenceReceipt:
     source_id: str
     source_contract_hash: str
     raw_sha256: str
+    receipt_id: str = ""
     raw_uri: str = ""
     byte_length: int = 0
     media_type: str = ""

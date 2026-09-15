@@ -152,3 +152,24 @@ CREATE TABLE IF NOT EXISTS `drop.oracle_quarantine` (
   source_id STRING DEFAULT '',
   run_id STRING DEFAULT ''
 );
+
+CREATE TABLE IF NOT EXISTS `drop.oracle_receipts` (
+  receipt_id STRING NOT NULL,
+  source_id STRING NOT NULL,
+  source_contract_hash STRING DEFAULT '',
+  raw_sha256 STRING NOT NULL,
+  raw_uri STRING DEFAULT '',
+  byte_length INT64 DEFAULT 0,
+  media_type STRING DEFAULT '',
+  compression STRING DEFAULT '',
+  fetched_at TIMESTAMP NOT NULL,
+  request_fingerprint STRING DEFAULT '',
+  response_status INT64 DEFAULT 0,
+  snapshot_semantics STRING DEFAULT 'FULL',
+  complete BOOL DEFAULT TRUE,
+  cursor STRING DEFAULT '',
+  watermark STRING DEFAULT '',
+  adapter_version STRING DEFAULT '',
+  parser_version STRING DEFAULT 'v1',
+  ingest_run_id STRING DEFAULT ''
+);

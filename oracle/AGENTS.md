@@ -23,22 +23,29 @@ agentcomfinal owns actions.
 | `ids.py` | Content-hash IDs (entity identity + record identity) | LIVE — needs entity ID split |
 | `contracts.py` | Schemas-as-code: all Oracle record types | LIVE — needs schema parity with SQL |
 | `provenance.py` | Raw hashing + ingest receipts | LIVE — needs RawEvidenceReceipt v2 |
-| `sources/registry.py` | SourceRegistry v2: licensing + adapter interface | LIVE — needs FetchResult + rights expansion |
+| `normalize/companies_house.py` | CH JSON parser → Entity + Observation bundles | LIVE (E1) — 5 fixture rows → 5 entities + 44 obs |
+| `sources/companies_house.py` | Fixture-backed CH adapter (fixture/empty/failed/partial) | LIVE (E1) |
+| `sources/registry.py` | SourceRegistry v2: licensing + adapter interface | LIVE — FetchResult contract enforced |
 | `exports/seesaw.py` | CandidateOpportunity → feature vector | LIVE — needs provenance-backed signal export |
-| `normalize/` | Taxonomy mapping, source → canonical | STUB (E1) |
+| `cli.py` | Operator interface: ingest / replay / evidence / check | LIVE (E1) |
+| `normalize/` | Taxonomy mapping, source → canonical | LIVE (E1) — CH parser; generic taxonomy pending |
 | `resolve/` | Entity resolution, SAME_AS_CANDIDATE promotion | STUB (E4) |
 | `signals/` | Versioned deterministic formula transforms | STUB (E7) |
 | `opportunities/` | Opportunity detectors (supply gap, fragmentation, etc) | STUB (E9) |
 | `probes/` | Probe requests for information acquisition | STUB (E8) |
 | `mcp/` | MCP query interface (oracle.entity, .slice, .changes) | STUB (E6+) |
-| `store/` | Persistence layer (SQLite local, BQ adapter) | STUB (E0) |
-| `raw/` | Raw evidence store (hash-addressed filesystem) | STUB (E0) |
-| `gates.py` | Quarantine gate runner | STUB (E0) |
-| `ingest/` | Ingest pipeline runner | STUB (E0) |
+| `store/` | Persistence layer (SQLite local, BQ adapter) | LIVE (E0/E1) — SQLite + receipts table; BQ adapter pending |
+| `raw/` | Raw evidence store (hash-addressed filesystem) | LIVE (E0/E1) — put/get/verify + tamper detection |
+| `gates.py` | Quarantine gate runner | LIVE (E0/E1) — receipt-aware RAW_HASH/RECEIPT wiring |
+| `ingest/` | Ingest pipeline runner | LIVE (E1) — receipts, entities, envelope convention |
 
 ## Build Order (decdev.md §49)
 
-Current track — E0 hardening before E1:
+Current track — E1 golden path proven (2026-09-15, 69 tests green):
+`ORACLE_GOLDEN_PATH_V1` works locally: fixture → RawStore → receipt →
+parse → entities/observations → gates → SQLite, with replay + evidence
+via `python -m oracle.cli`. Next: E2 live Companies House adapter
+(bulk snapshot + streaming), then E3 geography spine.
 
 1. ~~Fix repository ownership wording~~ (done: README, DEVINSTRUCT)
 2. Stable entity IDs vs immutable record IDs ← YOU ARE HERE

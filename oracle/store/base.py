@@ -37,6 +37,22 @@ class OracleStore(ABC):
         """Get observations for an entity, optionally filtered by predicate."""
 
     @abstractmethod
+    def get_observation(self, observation_id: str) -> dict | None:
+        """Retrieve a single observation by ID."""
+
+    @abstractmethod
+    def count_observations(self) -> int:
+        """Total observation rows (idempotence / replay checks)."""
+
+    @abstractmethod
+    def put_receipt(self, receipt: dict) -> dict:
+        """Persist a RawEvidenceReceipt (idempotent on receipt_id)."""
+
+    @abstractmethod
+    def get_receipt(self, receipt_id: str) -> dict | None:
+        """Retrieve a receipt by ID (lineage: observation → receipt)."""
+
+    @abstractmethod
     def put_event(self, event: dict) -> dict:
         """Insert event."""
 

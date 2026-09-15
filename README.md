@@ -54,24 +54,34 @@ ographuk/
     provenance.py        raw hashing + ingest receipt helpers
     sources/
       registry.py        SourceRegistry v2: licensing + adapter interface
+      companies_house.py fixture-backed CH adapter (fixture/empty/failed/partial)
+      fetch_result.py    FetchResult: SUCCESS/SUCCESS_EMPTY/PARTIAL/FAILED
     exports/
       seesaw.py          CandidateOpportunity → feature vector
-    normalize/           taxonomy mapping (E1 — stub)
+    cli.py               operator interface: ingest / replay / evidence / check
+    normalize/
+      companies_house.py CH JSON parser → Entity + Observation bundles (E1 live)
     resolve/             entity resolution (E4 — stub)
     signals/             versioned formula transforms (E7 — stub)
     opportunities/       opportunity detectors (E9 — stub)
     probes/              probe request logic (E8 — stub)
     mcp/                 MCP query interface (E6+ — stub)
-    store/               persistence layer (E0 — stub)
-    raw/                 raw evidence store (E0 — stub)
-    gates.py             quarantine gate runner (E0 — stub)
-    ingest/              ingest pipeline runner (E0 — stub)
+    store/
+      base.py            OracleStore interface (+ receipts)
+      sqlite.py          SQLite backend incl. oracle_receipts (E1 live)
+    raw/
+      store.py           hash-addressed RawStore (E1 live)
+    gates.py             quarantine gate runner (receipt-aware, E1 live)
+    ingest/
+      runner.py          ingest pipeline runner (receipts + entities, E1 live)
   schemas/
-    001_oracle_core.sql  BigQuery DDL (11 tables, queued until billing on)
-  fixtures/              golden test fixtures
+    001_oracle_core.sql  BigQuery DDL (12 tables incl. oracle_receipts)
+  fixtures/
+    companies_house/   golden CH fixture (5 rows)
   tests/
     conftest.py          test path setup
-    test_contracts.py    E0 contract + validation tests
+    test_contracts.py    E0 contract + validation tests (56)
+    test_golden_path.py  E1 golden-path tests (13)
 ```
 
 ## Phase Status
@@ -79,8 +89,8 @@ ographuk/
 | Phase | Description | Status |
 |-------|-------------|--------|
 | **E0** | Oracle contracts + IDs + hardening | **IN PROGRESS** — core contracts exist, hardening in progress |
-| E1 | Raw/provenance pipeline | TODO — requires RawStore + FetchResult + receipts |
-| E2 | Companies House backbone | TODO — requires E1 + live source adapter |
+| **E1** | Raw/provenance pipeline | **IN PROGRESS** — golden path proven locally: fixture → RawStore → receipt → parse → 5 entities + 44 obs → gates → SQLite; replay + evidence via `python -m oracle.cli`; 69 tests green (2026-09-15). Remaining: live source adapter heartbeat |
+| E2 | Companies House backbone | TODO — requires live bulk snapshot + streaming adapter |
 | E3 | Geography spine | TODO |
 | E4 | Cross-source entity resolution | TODO |
 | E5 | Physical-property graph | TODO |

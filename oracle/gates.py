@@ -41,6 +41,23 @@ def gate_raw_receipt_valid(receipt: dict) -> GateResult:
                       "" if ok else f"missing receipt fields: {missing}")
 
 
+def gate_raw_receipt_ref_format(raw_receipt_id: str) -> GateResult:
+    """Lightweight referential check when the full receipt row is not joined.
+
+    Full receipt field validation happens against the stored receipt
+    (gate_raw_receipt_valid); here we only assert the observation points at
+    a well-formed RECEIPT:<64hex> id so dangling provenance fails closed.
+    """
+    ok = (
+        isinstance(raw_receipt_id, str)
+        and raw_receipt_id.startswith("RECEIPT:")
+        and len(raw_receipt_id) == len("RECEIPT:") + 64
+        and all(c in "0123456789abcdef" for c in raw_receipt_id.split(":", 1)[1])
+    )
+    return GateResult("RAW_RECEIPT_VALID", ok,
+                      "" if ok else f"raw_receipt_id malformed ref: {raw_receipt_id!r}")
+
+
 def gate_provenance_complete(observation: dict) -> GateResult:
     required = ("raw_receipt_id", "record_locator", "observed_at", "source_id")
     missing = [f for f in required if not observation.get(f)]
@@ -96,21 +113,38 @@ DEFAULT_GATES = [
 
 
 def run_gates(observation: dict, registered_sources: set,
-              gates=None) -> tuple[bool, list[GateResult]]:
-    """Run all gates. Returns (all_passed, results)."""
+              gates=None, receipts: dict | None = None) -> tuple[bool, list[GateResult]]:
+    """Run all gates. Returns (all_passed, results).
+
+    receipts: optional {receipt_id: receipt_dict} join. When provided,
+    RAW_RECEIPT_VALID validates the referenced receipt's full fields and
+    RAW_HASH_VALID checks the receipt's raw_sha256. Without it, the gates
+    fall back to observation-carried provenance (lineage_root sha +
+    well-formed RECEIPT: ref) so they still fail closed.
+    """
     if gates is None:
         gates = DEFAULT_GATES
 
     results = []
     source_id = observation.get("source_id", "")
+    receipt_id = observation.get("raw_receipt_id", "")
+    receipt = (receipts or {}).get(receipt_id) if receipt_id else None
 
     for gate in gates:
         if gate is gate_source_registered:
             r = gate(source_id, registered_sources)
         elif gate is gate_raw_hash_valid:
-            r = gate(observation.get("raw_receipt_id", ""))
+            sha = ""
+            if isinstance(receipt, dict):
+                sha = receipt.get("raw_sha256", "")
+            if not sha:
+                sha = observation.get("lineage_root", "") or observation.get("raw_sha256", "")
+            r = gate(sha)
         elif gate is gate_raw_receipt_valid:
-            r = gate(observation)
+            if receipt is not None:
+                r = gate(receipt)
+            else:
+                r = gate_raw_receipt_ref_format(receipt_id)
         elif gate is gate_provenance_complete:
             r = gate(observation)
         elif gate is gate_identity_valid:
@@ -124,9 +158,6 @@ def run_gates(observation: dict, registered_sources: set,
         else:
             continue
         results.append(r)
-        if not r.passed:
-            # Continue checking but record all failures
-            pass
 
     all_passed = all(r.passed for r in results)
     return all_passed, results

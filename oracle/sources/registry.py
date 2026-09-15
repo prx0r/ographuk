@@ -5,12 +5,16 @@ from oracle.contracts import Source  # noqa: E402
 
 
 class SourceAdapter:
-    """Every adapter implements fetch() -> list of (payload_bytes, format).
-    Fetch fails -> [] (never raise). Raw bytes hashed downstream."""
+    """Every adapter implements fetch() -> FetchResult.
+
+    Fetch failure is FetchStatus.FAILED (outage = UNKNOWN), never [].
+    Empty source data is FetchStatus.SUCCESS_EMPTY (factual emptiness).
+    Raw bytes are hashed downstream; adapters never invent observations.
+    """
 
     source_id = ""
 
-    def fetch(self) -> list:
+    def fetch(self):  # -> FetchResult
         raise NotImplementedError
 
 

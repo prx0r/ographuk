@@ -114,6 +114,26 @@ CREATE TABLE IF NOT EXISTS oracle_quarantine (
     source_id TEXT DEFAULT '',
     run_id TEXT DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS oracle_receipts (
+    receipt_id TEXT PRIMARY KEY,
+    source_id TEXT NOT NULL,
+    source_contract_hash TEXT DEFAULT '',
+    raw_sha256 TEXT NOT NULL,
+    raw_uri TEXT DEFAULT '',
+    byte_length INTEGER DEFAULT 0,
+    media_type TEXT DEFAULT '',
+    compression TEXT DEFAULT '',
+    fetched_at TEXT NOT NULL,
+    request_fingerprint TEXT DEFAULT '',
+    response_status INTEGER DEFAULT 0,
+    snapshot_semantics TEXT DEFAULT 'FULL',
+    complete INTEGER DEFAULT 1,
+    cursor TEXT DEFAULT '',
+    watermark TEXT DEFAULT '',
+    adapter_version TEXT DEFAULT '',
+    parser_version TEXT DEFAULT 'v1',
+    ingest_run_id TEXT DEFAULT ''
+);
 """
 
 
@@ -129,8 +149,10 @@ class SqliteStore(OracleStore):
         self.conn.commit()
 
     def _json(self, obj) -> str:
-        if isinstance(obj, str):
-            return obj
+        # Always valid JSON: strings are quoted ("active", not active) so the
+        # value column round-trips through _unjson and matches BQ JSON type.
+        if obj is None:
+            return "null"
         return json.dumps(obj, default=str)
 
     def _unjson(self, s):
@@ -230,6 +252,54 @@ class SqliteStore(OracleStore):
                 "SELECT * FROM oracle_observations WHERE subject_entity_id = ?",
                 (subject_entity_id,))
         return [dict(row) for row in cur.fetchall()]
+
+    def get_observation(self, observation_id: str) -> dict | None:
+        cur = self.conn.execute(
+            "SELECT * FROM oracle_observations WHERE observation_id = ?",
+            (observation_id,))
+        row = cur.fetchone()
+        return dict(row) if row is not None else None
+
+    def count_observations(self) -> int:
+        cur = self.conn.execute("SELECT COUNT(*) AS n FROM oracle_observations")
+        return int(cur.fetchone()["n"])
+
+    def put_receipt(self, receipt: dict) -> dict:
+        self.conn.execute(
+            """INSERT OR REPLACE INTO oracle_receipts
+               (receipt_id, source_id, source_contract_hash, raw_sha256,
+                raw_uri, byte_length, media_type, compression, fetched_at,
+                request_fingerprint, response_status, snapshot_semantics,
+                complete, cursor, watermark, adapter_version, parser_version,
+                ingest_run_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (receipt["receipt_id"], receipt.get("source_id", ""),
+             receipt.get("source_contract_hash", ""),
+             receipt.get("raw_sha256", ""), receipt.get("raw_uri", ""),
+             receipt.get("byte_length", 0), receipt.get("media_type", ""),
+             receipt.get("compression", ""), receipt.get("fetched_at", ""),
+             receipt.get("request_fingerprint", ""),
+             receipt.get("response_status", 0),
+             receipt.get("snapshot_semantics", "FULL"),
+             1 if receipt.get("complete", True) else 0,
+             receipt.get("cursor", ""), receipt.get("watermark", ""),
+             receipt.get("adapter_version", ""),
+             receipt.get("parser_version", "v1"),
+             receipt.get("ingest_run_id", ""))
+        )
+        self.conn.commit()
+        return {"stored": receipt["receipt_id"]}
+
+    def get_receipt(self, receipt_id: str) -> dict | None:
+        cur = self.conn.execute(
+            "SELECT * FROM oracle_receipts WHERE receipt_id = ?",
+            (receipt_id,))
+        row = cur.fetchone()
+        if row is None:
+            return None
+        d = dict(row)
+        d["complete"] = bool(d.get("complete", 1))
+        return d
 
     def put_event(self, event: dict) -> dict:
         eid = event.get("event_id") or ids.record_id("EVT", event)

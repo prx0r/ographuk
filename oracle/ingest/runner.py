@@ -1,13 +1,65 @@
 """Ingest runner. Full pipeline from fetch to staging.
 
 DEVINSTRUCT §21. One run returns IngestRunReceipt. Runs must be replayable.
+
+Pipeline per artifact:
+  fetch → RawStore.put → RawEvidenceReceipt → store.put_receipt
+        → parser.parse → entities → observations → gates → store/quarantine
+
+Parser envelope convention: parser.parse() may return a mix of
+  {"entity": {...}, "observations": [...]}  (preferred: entity + obs bundle)
+  {"entities": [...], "observations": [...]}
+  {observation...}                            (plain gate-ready observation)
+  {"_error": {...}}                           (per-record parse failure)
+Plain dicts without an "observations" key are treated as observations.
 """
+
 from __future__ import annotations
 
+import inspect
 import time
 
-from oracle import ids
-from oracle.gates import run_gates
+
+def _utcnow() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _call_parser(parser, artifact: bytes, fetch_result, receipt):
+    """Call parser.parse with receipt context if it accepts it."""
+    try:
+        sig = inspect.signature(parser.parse)
+        params = list(sig.parameters.keys())
+    except (TypeError, ValueError):
+        return parser.parse(artifact, fetch_result)
+    if "receipt" in params:
+        return parser.parse(artifact, fetch_result, receipt)
+    return parser.parse(artifact, fetch_result)
+
+
+def _split_envelope(item):
+    """Split one parser output item → (entities, observations, record_error).
+
+    Returns (entities: list, observations: list, error: dict|None).
+    """
+    if not isinstance(item, dict):
+        return [], [], {"reason": "parse_error:record-not-dict"}, []
+    if "_error" in item:
+        err = item["_error"]
+        if isinstance(err, dict):
+            return [], [], err, []
+        return [], [], {"reason": str(err)}, []
+    if "observations" in item and isinstance(item["observations"], list):
+        entities = []
+        if isinstance(item.get("entity"), dict):
+            entities.append(item["entity"])
+        if isinstance(item.get("entities"), list):
+            entities.extend(e for e in item["entities"] if isinstance(e, dict))
+        identifiers = []
+        if isinstance(item.get("identifiers"), list):
+            identifiers = [d for d in item["identifiers"] if isinstance(d, dict)]
+        observations = [o for o in item["observations"] if isinstance(o, dict)]
+        return entities, observations, None, identifiers
+    return [], [item], None, []
 
 
 def run_ingest(source_id: str, adapter, raw_store, store,
@@ -17,6 +69,7 @@ def run_ingest(source_id: str, adapter, raw_store, store,
 
     Returns IngestRunReceipt with stats.
     """
+    from oracle.provenance import RawEvidenceReceipt
     from oracle.sources.fetch_result import FetchResult, FetchStatus
 
     if registered_sources is None:
@@ -33,80 +86,149 @@ def run_ingest(source_id: str, adapter, raw_store, store,
 
         if not isinstance(fetch_result, FetchResult):
             stats["errors"].append("adapter.fetch() did not return FetchResult")
-            return store.commit_ingest_run(run_id, {
-                **stats, "status": "error", "error": "bad_fetch_return"
-            })
+            final = {**stats, "status": "error", "error": "bad_fetch_return"}
+            return {**final, **store.commit_ingest_run(run_id, final)}
+
+        ok, reasons = fetch_result.validate()
+        if not ok:
+            stats["errors"].append(f"invalid FetchResult: {reasons}")
+            final = {**stats, "status": "error",
+                     "error": f"bad_fetch_result:{reasons}"}
+            return {**final, **store.commit_ingest_run(run_id, final)}
 
         if fetch_result.status == FetchStatus.FAILED:
-            return store.commit_ingest_run(run_id, {
-                **stats, "status": "failed",
-                "error": str(fetch_result.error) if fetch_result.error else "fetch_failed"
-            })
+            final = {**stats, "status": "failed",
+                     "error": str(fetch_result.error) if fetch_result.error else "fetch_failed"}
+            return {**final, **store.commit_ingest_run(run_id, final)}
 
-        # 2. Store raw artifacts
-        raw_hashes = []
+        # 2. Store raw artifacts + mint receipts (provenance first)
+        staged = []  # [(artifact_bytes, receipt, receipt_dict)]
+        raw_hashes, receipt_ids = [], []
+        fetched_at = fetch_result.watermark or _utcnow()
+        parser_version = getattr(parser, "PARSER_VERSION", None) or "v1"
         for artifact in fetch_result.artifacts:
-            if isinstance(artifact, bytes):
-                date = time.strftime("%Y-%m-%d", time.gmtime())
-                result = raw_store.put(source_id, date, artifact)
-                raw_hashes.append(result["raw_sha256"])
+            if not isinstance(artifact, bytes):
+                stats["errors"].append("artifact_not_bytes:skipped")
+                continue
+            date = time.strftime("%Y-%m-%d", time.gmtime())
+            put = raw_store.put(source_id, date, artifact)
+            raw_sha = put["raw_sha256"]
+            receipt = RawEvidenceReceipt(
+                source_id=source_id,
+                source_contract_hash="",
+                raw_sha256=raw_sha,
+                byte_length=put["byte_length"],
+                media_type="application/json",
+                fetched_at=fetched_at,
+                snapshot_semantics=fetch_result.snapshot_semantics.value,
+                complete=fetch_result.complete,
+                cursor=fetch_result.cursor,
+                watermark=fetch_result.watermark,
+                adapter_version=getattr(adapter, "ADAPTER_VERSION", "")
+                or getattr(adapter, "adapter_version", ""),
+                parser_version=parser_version,
+                ingest_run_id=run_id,
+            )
+            store.put_receipt(receipt.to_dict())
+            staged.append((artifact, receipt, receipt.to_dict()))
+            raw_hashes.append(raw_sha)
+            receipt_ids.append(receipt.receipt_id)
 
-        # 3. Parse (if parser provided)
-        records = []
-        if parser and fetch_result.artifacts:
-            for artifact in fetch_result.artifacts:
-                try:
-                    parsed = parser.parse(artifact, fetch_result)
-                    if parsed:
-                        records.extend(parsed)
-                except Exception as e:
-                    stats["errors"].append(f"parse_error: {e}")
+        # 3. Parse (per artifact, with receipt context)
+        items = []
+        for artifact, receipt, _rdict in staged:
+            if parser is None:
+                continue
+            try:
+                parsed = _call_parser(parser, artifact, fetch_result, receipt)
+            except Exception as e:
+                stats["errors"].append(f"parse_error: {e}")
+                continue
+            if parsed:
+                items.extend(parsed if isinstance(parsed, list) else [parsed])
 
-        stats["rows_in"] = len(records)
+        stats["rows_in"] = len(items)
 
-        # 4. Normalize and validate
+        # 4. Expand envelopes → entities + observations; store entities
         observations = []
         quarantined = []
-        for record in records:
-            if normalizer:
+        receipts_by_id = {}
+        for _a, _r, rdict in staged:
+            receipts_by_id[rdict["receipt_id"]] = rdict
+
+        def _quarantine(record, reason):
+            quarantined.append({"record": record, "reason": reason})
+            try:
+                store.quarantine(
+                    record if isinstance(record, dict) else {"value": str(record)},
+                    str(reason),
+                )
+            except Exception as e:
+                stats["errors"].append(f"quarantine_error: {e}")
+
+        for item in items:
+            entities, obs_list, record_error, identifiers = _split_envelope(item)
+            if record_error is not None:
+                _quarantine(item, record_error.get("reason", "parse_error"))
+                continue
+            for entity in entities:
                 try:
-                    normalized = normalizer.normalize(record)
+                    store.put_entity(entity)
                 except Exception as e:
-                    quarantined.append({"record": record, "reason": f"normalize_error: {e}"})
-                    continue
-            else:
-                normalized = record
+                    stats["errors"].append(f"entity_store_error: {e}")
+            for ident in identifiers:
+                try:
+                    store.put_identifier(ident)
+                except Exception as e:
+                    stats["errors"].append(f"identifier_store_error: {e}")
+            for record in obs_list:
+                # 5. Optional legacy normalizer hook
+                if normalizer:
+                    try:
+                        record = normalizer.normalize(record)
+                    except Exception as e:
+                        _quarantine(record, f"normalize_error: {e}")
+                        continue
 
-            # 5. Run gates
-            all_passed, gate_results = run_gates(normalized, registered_sources)
+                # 6. Run gates (receipt-aware)
+                all_passed, gate_results = run_gates_lazy(
+                    record, registered_sources, receipts_by_id)
 
-            if all_passed:
-                store.put_observation(normalized)
-                observations.append(normalized)
-            else:
-                failed_gates = [r.gate_name for r in gate_results if not r.passed]
-                quarantined.append({
-                    "record": normalized,
-                    "reason": f"gates_failed: {failed_gates}"
-                })
-                store.quarantine(normalized, str(failed_gates))
+                if all_passed:
+                    store.put_observation(record)
+                    observations.append(record)
+                else:
+                    failed_gates = [r.gate_name for r in gate_results if not r.passed]
+                    _quarantine(record, f"gates_failed: {failed_gates}")
 
         stats["rows_out"] = len(observations)
         stats["quarantined"] = len(quarantined)
 
-        # 6. Commit run
-        return store.commit_ingest_run(run_id, {
+        # 7. Commit run (merge stats into the returned receipt)
+        final_stats = {
             **stats,
             "status": "completed" if not stats["errors"] else "completed_with_errors",
             "artifacts": len(raw_hashes),
             "raw_hashes": raw_hashes,
+            "receipt_ids": receipt_ids,
             "fetch_status": fetch_result.status.value,
             "cursor": fetch_result.cursor,
             "watermark": fetch_result.watermark,
-        })
+        }
+        committed = store.commit_ingest_run(run_id, final_stats)
+        return {**final_stats, **committed}
 
     except Exception as e:
         stats["errors"].append(f"ingest_error: {e}")
-        return store.commit_ingest_run(run_id, {
-            **stats, "status": "error", "error": str(e)
-        })
+        final = {**stats, "status": "error", "error": str(e)}
+        try:
+            return {**final, **store.commit_ingest_run(run_id, final)}
+        except Exception:
+            return final
+
+
+def run_gates_lazy(observation: dict, registered_sources: set,
+                   receipts: dict | None):
+    from oracle.gates import run_gates
+
+    return run_gates(observation, registered_sources, receipts=receipts)

@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from oracle import ids
@@ -207,7 +208,7 @@ class SqliteStore(OracleStore):
         self.conn = sqlite3.connect(str(self.db_path))
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(DDL)
-        self.conn.commit()
+        self._commit()
 
     def _json(self, obj) -> str:
         # Always valid JSON: strings are quoted ("active", not active) so the
@@ -224,6 +225,33 @@ class SqliteStore(OracleStore):
         except (json.JSONDecodeError, TypeError):
             return s
 
+    def _commit(self):
+        if not getattr(self, "_in_batch", False):
+            self.conn.commit()
+
+    @contextmanager
+    def batch(self):
+        """Bulk-load window: single transaction, relaxed durability.
+
+        Per-row commits turn millions of inserts into hours; one commit
+        per chunk turns them into minutes. Durability is restored on exit
+        (a crash loses only the in-flight chunk, which re-derives
+        identically from retained raw bytes).
+        """
+        prev_sync = self.conn.execute("PRAGMA synchronous").fetchone()[0]
+        self._in_batch = True
+        self.conn.execute("PRAGMA synchronous=NORMAL")
+        self.conn.execute("BEGIN")
+        try:
+            yield self
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+        finally:
+            self._in_batch = False
+            self.conn.execute(f"PRAGMA synchronous={prev_sync}")
+
     def put_entity(self, entity: dict) -> dict:
         self.conn.execute(
             """INSERT OR REPLACE INTO oracle_entities
@@ -233,7 +261,7 @@ class SqliteStore(OracleStore):
              entity.get("country", "GB"), entity.get("canonical_name", ""),
              entity.get("status", "active"), entity.get("created_at", ""))
         )
-        self.conn.commit()
+        self._commit()
         return {"stored": entity["entity_id"]}
 
     def get_entity(self, entity_id: str) -> dict | None:
@@ -251,7 +279,7 @@ class SqliteStore(OracleStore):
             (identifier["entity_id"], identifier["id_type"],
              identifier["id_value"])
         )
-        self.conn.commit()
+        self._commit()
         return {"stored": f"{identifier['id_type']}:{identifier['id_value']}"}
 
     def put_relation(self, relation: dict) -> dict:
@@ -278,7 +306,7 @@ class SqliteStore(OracleStore):
              relation.get("valid_from", ""),
              relation.get("valid_to", ""))
         )
-        self.conn.commit()
+        self._commit()
         return {"stored": rid, "inserted": cur.rowcount == 1}
 
     def put_observation(self, observation: dict) -> dict:
@@ -311,7 +339,7 @@ class SqliteStore(OracleStore):
               observation.get("confidence"),
               observation.get("lineage_root", ""))
         )
-        self.conn.commit()
+        self._commit()
         return {"observation_id": oid, "stored": True,
                 "inserted": cur.rowcount == 1}
 
@@ -361,7 +389,7 @@ class SqliteStore(OracleStore):
              receipt.get("parser_version", "v1"),
              receipt.get("ingest_run_id", ""))
         )
-        self.conn.commit()
+        self._commit()
         return {"stored": receipt["receipt_id"]}
 
     def get_receipt(self, receipt_id: str) -> dict | None:
@@ -392,7 +420,7 @@ class SqliteStore(OracleStore):
              self._json(event.get("payload", {})),
              self._json(event.get("triggering_observation_ids", [])))
         )
-        self.conn.commit()
+        self._commit()
         return {"event_id": eid, "stored": True, "inserted": cur.rowcount == 1}
 
     def put_signal(self, signal: dict) -> dict:
@@ -408,7 +436,7 @@ class SqliteStore(OracleStore):
               signal.get("computed_at", ""),
               signal.get("code_hash", ""))
         )
-        self.conn.commit()
+        self._commit()
         return {"stored": signal["signal_id"], "inserted": cur.rowcount == 1}
 
     def put_hypothesis(self, hypothesis: dict) -> dict:
@@ -421,7 +449,7 @@ class SqliteStore(OracleStore):
               self._json(hypothesis.get("contradicting", [])),
               self._json(hypothesis.get("falsifiers", [])))
         )
-        self.conn.commit()
+        self._commit()
         return {"stored": hypothesis["hypothesis_id"],
                 "inserted": cur.rowcount == 1}
 
@@ -441,7 +469,7 @@ class SqliteStore(OracleStore):
               outcome.get("observed_at", ""),
               outcome.get("verification_status", "UNVERIFIED"))
         )
-        self.conn.commit()
+        self._commit()
         return {"stored": outcome["outcome_id"], "inserted": cur.rowcount == 1}
 
     def put_opportunity(self, opportunity: dict) -> dict:
@@ -468,7 +496,7 @@ class SqliteStore(OracleStore):
              opportunity.get("input_root", ""),
              opportunity.get("created_at", ""))
         )
-        self.conn.commit()
+        self._commit()
         return {"stored": opportunity["opportunity_id"],
                 "inserted": cur.rowcount == 1}
 
@@ -488,7 +516,7 @@ class SqliteStore(OracleStore):
                VALUES (?, ?, ?, 'running')""",
             (run_id, source_id, now)
         )
-        self.conn.commit()
+        self._commit()
         return {"run_id": run_id, "source_id": source_id, "started_at": now}
 
     def commit_ingest_run(self, run_id: str, stats: dict) -> dict:
@@ -506,7 +534,7 @@ class SqliteStore(OracleStore):
              stats.get("inserted", 0), stats.get("already_present", 0),
              run_id)
         )
-        self.conn.commit()
+        self._commit()
         return {"run_id": run_id, "finished_at": now}
 
     def quarantine(self, record: dict, reason: str,
@@ -540,7 +568,7 @@ class SqliteStore(OracleStore):
                  record.get("record_locator", "")
                  if isinstance(record, dict) else ""))
         )
-        self.conn.commit()
+        self._commit()
         return {"quarantine_id": qid, "quarantined_at": now,
                 "inserted": cur.rowcount == 1}
 
@@ -578,7 +606,7 @@ class SqliteStore(OracleStore):
              source.get("last_success", ""), source.get("cursor", ""),
              source.get("schema_hash", ""))
         )
-        self.conn.commit()
+        self._commit()
         return {"stored": source["source_id"],
                 "inserted": cur.rowcount == 1}
 
@@ -607,7 +635,7 @@ class SqliteStore(OracleStore):
              raw_object.get("ingested_at", "") or time.strftime(
                  "%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
         )
-        self.conn.commit()
+        self._commit()
         return {"stored": raw_object["raw_sha256"],
                 "inserted": cur.rowcount == 1}
 

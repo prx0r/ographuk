@@ -59,12 +59,18 @@ def _utcnow() -> str:
 
 
 def _file_watermark(path: Path) -> str:
-    """Deterministic watermark: the fixture file's mtime (UTC).
+    """Deterministic watermark for a fixture/snapshot file.
 
-    Same file → same watermark → same observed_at/receipt_id → same
-    semantic IDs. Re-ingestion is idempotent by construction; a changed
-    file (new snapshot) yields a new watermark and new records, correctly.
+    Prefer the snapshot date embedded in official filenames
+    (BasicCompanyData-2026-09-01-part1_7.zip → 2026-09-01T00:00:00Z):
+    same snapshot → same watermark even if re-downloaded. Fall back to
+    the file mtime, then wall-clock.
     """
+    import re
+
+    m = re.search(r"(\d{4})-(\d{2})-(\d{2})", path.name)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}T00:00:00Z"
     try:
         mtime = path.stat().st_mtime
     except OSError:
@@ -203,6 +209,71 @@ class CompaniesHouseAdapter(SourceAdapter):
         return FetchResult(
             status=FetchStatus.SUCCESS,
             artifacts=[raw],
+            snapshot_semantics=SnapshotSemantics.FULL,
+            complete=True,
+            source_id=self.source_id,
+            adapter_version=ADAPTER_VERSION,
+            started_at=started,
+            finished_at=_utcnow(),
+            watermark=watermark,
+        )
+
+
+class FileArtifact:
+    """Path-based artifact for bulk snapshots (review item 5, first step).
+
+    Carries location + metadata instead of bytes. RawStore.put_file()
+    hashes while copying; the parser streams rows off the stored copy.
+    """
+
+    def __init__(self, path: str | Path, media_type: str = "application/zip"):
+        self.path = str(path)
+        self.media_type = media_type
+        try:
+            self.byte_length = Path(path).stat().st_size
+        except OSError:
+            self.byte_length = 0
+
+    def __repr__(self):
+        return f"FileArtifact({self.path}, {self.byte_length} bytes)"
+
+
+class CompaniesHouseBulkAdapter(SourceAdapter):
+    """Live bulk snapshot adapter: local paths of official part ZIPs.
+
+    Artifacts are FileArtifacts (never loaded into memory). Watermark is
+    the snapshot date embedded in official filenames.
+    """
+
+    source_id = SOURCE_ID
+    ADAPTER_VERSION = ADAPTER_VERSION
+
+    def __init__(self, part_paths: list):
+        self.part_paths = [str(p) for p in part_paths]
+        self.artifact_name = ",".join(Path(p).name for p in self.part_paths)
+
+    def fetch(self) -> FetchResult:
+        from oracle.sources.fetch_result import SnapshotSemantics
+
+        started = _utcnow()
+        missing = [p for p in self.part_paths if not Path(p).is_file()]
+        if missing:
+            return FetchResult(
+                status=FetchStatus.FAILED,
+                artifacts=[],
+                snapshot_semantics=SnapshotSemantics.PARTIAL,
+                complete=False,
+                error={"code": "PARTS_MISSING", "detail": missing},
+                source_id=self.source_id,
+                adapter_version=ADAPTER_VERSION,
+                started_at=started,
+                finished_at=_utcnow(),
+            )
+        watermarks = {_file_watermark(Path(p)) for p in self.part_paths}
+        watermark = sorted(watermarks)[0] if len(watermarks) == 1 else started
+        return FetchResult(
+            status=FetchStatus.SUCCESS,
+            artifacts=[FileArtifact(p) for p in self.part_paths],
             snapshot_semantics=SnapshotSemantics.FULL,
             complete=True,
             source_id=self.source_id,

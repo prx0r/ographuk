@@ -46,6 +46,9 @@ FIELD_PREDICATES = {
 }
 
 # Real Companies House BasicCompanyData CSV headers → intermediate fields.
+# NOTE: the real files ship inconsistent leading spaces in header names
+# (' CompanyNumber') and SicText-only SIC columns — keys are stripped and
+# SIC codes are extracted from the SicText prefix on read.
 CSV_FIELD_MAP = {
     "CompanyName": "company_name",
     "CompanyNumber": "company_number",
@@ -59,24 +62,115 @@ CSV_FIELD_MAP = {
     "Accounts.NextDueDate": "accounts_next_due",
     "ConfStmtNextDueDate": "confirmation_next_due",
 }
-CSV_SIC_CODE_HEADERS = [
-    "SICCode.Code_1", "SICCode.Code_2", "SICCode.Code_3", "SICCode.Code_4",
+CSV_SIC_TEXT_HEADERS = [
+    "SICCode.SicText_1", "SICCode.SicText_2",
+    "SICCode.SicText_3", "SICCode.SicText_4",
 ]
+CSV_SIC_CODE_HEADERS = [
+    "SICCode.Code_1", "SICCode.Code_2",
+    "SICCode.Code_3", "SICCode.Code_4",
+]
+CSV_DATE_FIELDS = {
+    "incorporation_date", "dissolution_date",
+    "accounts_next_due", "confirmation_next_due",
+}
+
+
+def _clean_row(row: dict) -> dict:
+    """Strip header whitespace and values (real CH headers are ragged)."""
+    return {(k.strip() if isinstance(k, str) else k):
+            (v.strip() if isinstance(v, str) else v)
+            for k, v in row.items()}
+
+
+def _sic_from_text(text: str) -> str:
+    """'62012 - Business ...' → '62012'. No leading digits → ''."""
+    import re
+
+    m = re.match(r"(\d+)", (text or "").strip())
+    return m.group(1) if m else ""
+
+
+def _iso_date(value: str | None) -> str | None:
+    """DD/MM/YYYY → YYYY-MM-DD. ISO input passes through. Else raw/None."""
+    import re
+
+    if value is None:
+        return None
+    v = value.strip()
+    if not v:
+        return None
+    m = re.match(r"^(\d{2})/(\d{2})/(\d{4})$", v)
+    if m:
+        dd, mm, yyyy = m.groups()
+        return f"{yyyy}-{mm}-{dd}"
+    return v
 
 
 def csv_row_to_company(row: dict) -> dict:
     """Real-format CSV row → intermediate company dict (same shape as JSON)."""
+    row = _clean_row(row)
     company = {}
     for header, field in CSV_FIELD_MAP.items():
-        value = (row.get(header) or "").strip()
+        value = row.get(header) or ""
         company[field] = value or None
     status = (company.get("company_status") or "").strip().lower()
     company["company_status"] = status or "active"
-    company["sic_codes"] = [
-        (row.get(h) or "").strip() for h in CSV_SIC_CODE_HEADERS
-        if (row.get(h) or "").strip()
-    ]
+    codes = []
+    for h in CSV_SIC_CODE_HEADERS:
+        code = (row.get(h) or "").strip()
+        if code:
+            codes.append(code)
+    if not codes:
+        for h in CSV_SIC_TEXT_HEADERS:
+            code = _sic_from_text(row.get(h) or "")
+            if code:
+                codes.append(code)
+    company["sic_codes"] = codes
+    for field in CSV_DATE_FIELDS:
+        company[field] = _iso_date(company.get(field))
     return company
+
+
+def iter_zip_rows_from_path(zip_path: str):
+    """Stream (inner_name, line_number, row_dict) from a ZIP file on disk.
+
+    The archive is never fully loaded: rows flow straight from the
+    decompressor through the CSV reader.
+    """
+    with zipfile.ZipFile(zip_path) as z:
+        names = [n for n in z.namelist() if n.lower().endswith(".csv")]
+        if not names:
+            raise ValueError("parse_error:zip-without-csv")
+        for inner in sorted(names):
+            with z.open(inner) as fh:
+                reader = csv.DictReader(
+                    io.TextIOWrapper(fh, encoding="utf-8-sig"),
+                    skipinitialspace=True)
+                for row in reader:
+                    yield inner, reader.line_num, row
+
+
+def iter_batches(zip_path: str, *, receipt_id: str, raw_sha256: str,
+                 observed_at: str, artifact_name: str,
+                 chunk_rows: int = 5000):
+    """Yield CanonicalBatch per chunk_rows CSV rows (bounded memory)."""
+    csv_labels = {v: k for k, v in CSV_FIELD_MAP.items()}
+    csv_labels["sic_codes"] = "SICCode.SicText_*"
+    batch = CanonicalBatch()
+    n = 0
+    for inner, lineno, row in iter_zip_rows_from_path(zip_path):
+        base = f"{artifact_name}#{inner}:row={lineno}"
+        _add_company(batch, csv_row_to_company(row), lineno, base,
+                     receipt_id, raw_sha256, observed_at,
+                     field_labels=csv_labels)
+        n += 1
+        if n >= chunk_rows:
+            yield batch
+            batch = CanonicalBatch()
+            n = 0
+    if n or batch.rejects:
+        yield batch
 
 
 def iter_zip_rows(raw_bytes: bytes):
@@ -91,7 +185,9 @@ def iter_zip_rows(raw_bytes: bytes):
             raise ValueError("parse_error:zip-without-csv")
         for inner in sorted(names):
             with z.open(inner) as fh:
-                reader = csv.DictReader(io.TextIOWrapper(fh, encoding="utf-8"))
+                reader = csv.DictReader(
+                    io.TextIOWrapper(fh, encoding="utf-8-sig"),
+                    skipinitialspace=True)
                 for row in reader:
                     yield inner, reader.line_num, row
 
@@ -307,6 +403,15 @@ class CompaniesHouseParser:
             artifact, receipt_id=receipt_id, raw_sha256=raw_sha,
             observed_at=observed, artifact_name=artifact_name,
         )
+
+    def iter_batches(self, zip_path: str, *, receipt_id: str,
+                     raw_sha256: str, observed_at: str, artifact_name: str,
+                     chunk_rows: int = 5000):
+        """Stream CanonicalBatch per chunk_rows rows (bulk path)."""
+        return iter_batches(
+            zip_path, receipt_id=receipt_id, raw_sha256=raw_sha256,
+            observed_at=observed_at, artifact_name=artifact_name,
+            chunk_rows=chunk_rows)
 
 
 def _utcnow() -> str:

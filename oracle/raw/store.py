@@ -46,6 +46,37 @@ class RawStore:
             "path": str(p),
         }
 
+    def put_file(self, source_id: str, date: str, src: str) -> dict:
+        """Hash-while-copy a file into the store without loading it.
+
+        Bounded memory regardless of artifact size. Returns the same
+        receipt shape as put(). Re-copying identical bytes is a no-op
+        verified by comparison of the copied stream.
+        """
+        import hashlib as _hl
+
+        src_path = Path(src)
+        h = _hl.sha256()
+        with open(src_path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+        sha = h.hexdigest()
+        p = self._path(source_id, date, sha)
+        if not p.exists():
+            h2 = _hl.sha256()
+            with open(src_path, "rb") as fh, open(p, "wb") as out:
+                for chunk in iter(lambda: fh.read(1 << 20), b""):
+                    h2.update(chunk)
+                    out.write(chunk)
+            if h2.hexdigest() != sha:
+                p.unlink(missing_ok=True)
+                raise ValueError("copy changed mid-stream; aborted")
+        return {
+            "raw_sha256": sha,
+            "byte_length": src_path.stat().st_size,
+            "path": str(p),
+        }
+
     def get(self, sha256: str) -> bytes | None:
         """Retrieve raw bytes by hash. Returns None if not found."""
         for source_dir in self.base.iterdir():
